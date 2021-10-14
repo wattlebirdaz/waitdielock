@@ -1,6 +1,6 @@
 # WaitDieLock
 
-An naive implementation of a waitdie read write lock with upgrade.
+A naive implementation of a waitdie read write lock with upgrade.
 
 # Build
 
