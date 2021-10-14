@@ -1,8 +1,8 @@
+#include <cassert>
 #include <cstdint>
 #include <list>
 #include <memory>
 #include <mutex>
-#include <cassert>
 
 #include "atomic_wrapper.hpp"
 
@@ -18,10 +18,9 @@ private:
         TS ts;
         Node node;
     };
+
 public:
-    TimestampSortedList() {
-        clear();
-    }
+    TimestampSortedList() { clear(); }
 
     bool empty() { return item_list.empty(); }
 
@@ -50,21 +49,13 @@ public:
         throw std::runtime_error("timestamp not in list");
     }
 
-    Node& front() {
-        return item_list.front().node;
-    }
+    Node& front() { return item_list.front().node; }
 
-    void pop() {
-        item_list.pop_front();
-    }
+    void pop() { item_list.pop_front(); }
 
-    TS get_back_timestamp() {
-        return item_list.back().ts;
-    }
+    TS get_back_timestamp() { return item_list.back().ts; }
 
-    uint64_t get_size() {
-        return item_list.size();
-    }
+    uint64_t get_size() { return item_list.size(); }
 
     void trace() {
         printf("[ ");
@@ -79,7 +70,6 @@ private:
 };
 
 class WaitDieLock {
-    
 private:
     using TS = uint64_t;
     enum Operation : uint8_t {
@@ -89,9 +79,12 @@ private:
         U   // upgrade
     };
     struct WaiterNode {
-        WaiterNode(TS ts, Operation op, bool waiting): ts(ts), op(op), waiting(waiting) {}
+        WaiterNode(TS ts, Operation op, bool waiting)
+            : ts(ts)
+            , op(op)
+            , waiting(waiting) {}
         alignas(64) bool waiting;  // spin variable
-        char pad[64-sizeof(bool)] = {};
+        char pad[64 - sizeof(bool)] = {};
         TS ts;         // timestamp
         Operation op;  // S, E, U
     };
@@ -108,18 +101,16 @@ private:
     struct OwnerList {
         Operation op = I;  // I, S, E
         // sorted (ts big -> ts small) list of owners
-        TimestampSortedList<std::shared_ptr<OwnerNode>> owners;  
+        TimestampSortedList<std::shared_ptr<OwnerNode>> owners;
         void insert(TS ts, std::shared_ptr<OwnerNode> node) { owners.insert(ts, node); }
         void remove(TS ts) {
             owners.remove(ts);
             if (owners.empty()) op = I;
         }
-        uint64_t get_size() {
-            return owners.get_size();
-        }
+        uint64_t get_size() { return owners.get_size(); }
         // get the smallest timestamp in owner_list
-        TS get_min_timestamp() {return owners.get_back_timestamp(); }
-        void trace() { 
+        TS get_min_timestamp() { return owners.get_back_timestamp(); }
+        void trace() {
             printf(op == I ? "(I):" : op == S ? "(S):" : "(E):");
             return owners.trace();
         }
@@ -130,7 +121,6 @@ private:
     OwnerList owner_list;
 
 public:
-
     WaitDieLock() {}
 
     void trace() {
@@ -144,15 +134,20 @@ public:
 
     bool try_lock_shared(uint64_t ts) {
         latch.lock();
-        // STATE -> ACTION
-        // owner(I, S), no waiter -> add to owner_list, change it's op to S, unlock latch and return true
-        // owner(I), waiter -> add to waiter_list, unlock latch and spin 
-        // owner(S), waiter -> compare with min ts of owner with this ts,
-        //                     if this ts is smaller, add to waiter_list, unlock latch and spin
-        //                     else unlock latch and return false
-        // owner(E) -> compare with min ts of owner with this ts,
-        //             if this ts is smaller, add to waiter_list, unlock latch and spin
-        //             else unlock latch and return false
+        /**
+         * STATE -> ACTION
+         * 
+         * owner(I, S), no waiter -> add to owner_list, change it's op to S, unlock latch and return
+         *true
+         *
+         * owner(I), waiter -> add to waiter_list, unlock latch and spin
+         *
+         * owner(S), waiter -> compare with min ts of owner with this ts, if this ts is smaller, add
+         *to waiter_list, unlock latch and spin else unlock latch and return false
+         *
+         * owner(E) -> compare with min ts of owner with this ts, if this ts is smaller, add to
+         *waiter_list, unlock latch and spin else unlock latch and return false
+         **/
         bool no_waiter = waiter_list.empty();
         Operation op = owner_list.op;
         if ((op == I || op == S) && no_waiter) {
@@ -166,15 +161,17 @@ public:
             auto node = std::make_shared<WaiterNode>(ts, S, true);
             waiter_list.insert(ts, node);
             latch.unlock();
-            while (load_acquire(node->waiting)); // spin
+            while (load_acquire(node->waiting))
+                ;  // spin
             return true;
         }
-        if (((op == S) && !no_waiter)|| op == E) {
+        if (((op == S) && !no_waiter) || op == E) {
             if (owner_list.get_min_timestamp() > ts) {
                 auto node = std::make_shared<WaiterNode>(ts, S, true);
                 waiter_list.insert(ts, node);
                 latch.unlock();
-                while (load_acquire(node->waiting)); // spin
+                while (load_acquire(node->waiting))
+                    ;  // spin
                 return true;
             } else {
                 latch.unlock();
@@ -186,12 +183,18 @@ public:
 
     bool try_lock(uint64_t ts) {
         latch.lock();
-        // STATE -> ACTION
-        // owner(I), no waiter -> add to owner_list, change it's op to E, unlock latch and return true
-        // owner(I), waiter -> add to waiter_list, unlock latch and spin
-        // owner(S, E) -> compare with min ts of owner with this ts,
-        //                if this ts is smaller, add to waiter_list, unlock latch and spin
-        //                else unlock latch and return false
+        /**
+         * STATE -> ACTION
+         *
+         * owner(I), no waiter -> add to owner_list, change it's op to E, unlock latch and return
+         *true
+         *
+         * owner(I), waiter -> add to waiter_list, unlock latch and spin
+         *
+         * owner(S, E) -> compare with min ts of owner with this ts, if this ts is smaller, add to
+         *waiter_list, unlock latch and spin else unlock latch and return false
+         *
+         **/
         bool no_waiter = waiter_list.empty();
         Operation op = owner_list.op;
         if (op == I && no_waiter) {
@@ -207,7 +210,8 @@ public:
             auto node = std::make_shared<WaiterNode>(ts, E, true);
             waiter_list.insert(ts, node);
             latch.unlock();
-            while (load_acquire(node->waiting)); // spin
+            while (load_acquire(node->waiting))
+                ;  // spin
             return true;
         }
         if (op == S || op == E) {
@@ -215,7 +219,8 @@ public:
                 auto node = std::make_shared<WaiterNode>(ts, E, true);
                 waiter_list.insert(ts, node);
                 latch.unlock();
-                while (load_acquire(node->waiting)); // spin
+                while (load_acquire(node->waiting))
+                    ;  // spin
                 return true;
             } else {
                 latch.unlock();
@@ -227,12 +232,15 @@ public:
 
     bool try_lock_upgrade(uint64_t ts) {
         latch.lock();
-        // STATE -> ACTION
-        // owner(I, E) -> throw
-        // owner(S) -> compare with min ts of owner with this ts,
-        //             if they are same, and multiple owners exist, add to waiter_list, unlock latch and spin
-        //             if they are same, and single owner exists, change owner state and return true
-        //             else unlock latch and return false
+        /**
+         * STATE -> ACTION
+         *
+         * owner(I, E) -> throw
+         *
+         * owner(S) -> compare with min ts of owner with this ts, if they are same, and multiple
+         *owners exist, add to waiter_list, unlock latch and spin if they are same, and single owner
+         *exists, change owner state and return true else unlock latch and return false
+         **/
         bool no_waiter = waiter_list.empty();
         Operation op = owner_list.op;
         if (op == I || op == E) {
@@ -242,9 +250,10 @@ public:
             uint64_t num_owners = owner_list.get_size();
             if (min_ts == ts && num_owners > 1) {
                 auto node = std::make_shared<WaiterNode>(ts, U, true);
-                waiter_list.insert(ts, node); // this should come to the head of waiter_list
+                waiter_list.insert(ts, node);  // this should come to the head of waiter_list
                 latch.unlock();
-                while (load_acquire(node->waiting));
+                while (load_acquire(node->waiting))
+                    ;
                 return true;
             } else if (min_ts == ts && num_owners == 1) {
                 owner_list.op = E;
@@ -260,9 +269,13 @@ public:
 
     void unlock_shared(uint64_t ts) {
         latch.lock();
-        // STATE -> ACTION
-        // owner(I, E) -> throw
-        // owner(S) -> remove this ts from owner_list, promote waiters, unlock latch, return
+        /**
+         * STATE -> ACTION
+         *
+         * owner(I, E) -> throw
+         *
+         * owner(S) -> remove this ts from owner_list, promote waiters, unlock latch, return
+         **/
         Operation op = owner_list.op;
         if (op == I || op == E) {
             throw std::runtime_error("No shared lock to unlock");
@@ -277,9 +290,13 @@ public:
 
     void unlock(uint64_t ts) {
         latch.lock();
-        // STATE -> ACTION
-        // owner(I, S) -> throw
-        // owner(E) -> remove this ts from owners if found, promote_waiters, unlock latch, return
+        /**
+         * STATE -> ACTION
+         *
+         * owner(I, S) -> throw
+         *
+         * owner(E) -> remove this ts from owners if found, promote_waiters, unlock latch, return
+         **/
         Operation op = owner_list.op;
         if (op == I || op == S) {
             throw std::runtime_error("No exclusive lock to unlock");
@@ -295,15 +312,26 @@ public:
 private:
     // Get latch before calling this function
     void promote_waiters() {
-        // STATE -> ACTION
-        // no_waiter -> return
-        // waiter(S), owner(I, S) -> promote waiter, change owner mode, pop from waiter_list, set waiting to false, loop
-        // waiter(S), owner(E) -> return
-        // waiter(E), owner(S, E) -> return
-        // waiter(E), owner(I) -> promote waiter, change owner mode, pop from waiter_list, set waiting to false, loop
-        // waiter(U), owner(I, E) -> throw
-        // waiter(U), owner(S), multiple owners -> return
-        // waiter(U), owner(S), single owner -> promote waiter, change owner mode, pop from waiter_list, set waiting to false, loop
+        /**
+         * STATE -> ACTION
+         * no_waiter -> return
+         *
+         * waiter(S), owner(I, S) -> promote waiter, change owner mode, pop from waiter_list, set
+         *waiting to false, loop
+         *
+         * waiter(S), owner(E) -> return waiter(E), owner(S, E) -> return
+         *
+         * waiter(E), owner(I) -> promote waiter, change owner mode, pop from waiter_list, set
+         *waiting to false, loop
+         *
+         * waiter(U), owner(I, E) -> throw
+         *
+         * waiter(U), owner(S), multiple owners -> return
+         *
+         * waiter(U), owner(S), single owner -> promote waiter, change owner mode, pop from
+         *waiter_list, set waiting to false, loop
+         *
+         **/
         bool no_waiter;
         Operation o_op;
         Operation w_op;
@@ -314,10 +342,9 @@ private:
             o_op = owner_list.op;
             num_owners = owner_list.get_size();
             w_op = waiter_list.front()->op;
-            
-            bool finish = (w_op == S && o_op == E) || 
-                            (w_op == E && (o_op == S || o_op == E)) ||
-                            (w_op == U && o_op == S && num_owners > 1);
+
+            bool finish = (w_op == S && o_op == E) || (w_op == E && (o_op == S || o_op == E))
+                || (w_op == U && o_op == S && num_owners > 1);
             if (finish) return;
 
             bool error = (w_op == U && (o_op == I || o_op == E));
@@ -361,7 +388,7 @@ private:
                 store_release(waiter->waiting, false);
                 continue;
             }
-            throw std::runtime_error("Unhandled State Found");          
+            throw std::runtime_error("Unhandled State Found");
         }
     }
 };
